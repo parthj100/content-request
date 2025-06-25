@@ -1,0 +1,340 @@
+var token = "";
+var telegramUrl = "https://api.telegram.org/bot" + token;
+var ssId = "";
+var webAppUrl = "https://script.google.com/macros/s//exec"; // Your Google Web App URL
+var scriptProperties = PropertiesService.getScriptProperties();
+
+function setWebhook() {
+  var url = telegramUrl + "/setWebhook?url=" + webAppUrl;
+  var response = UrlFetchApp.fetch(url);
+  Logger.log(response.getContentText());
+}
+
+function initializeUserState(chatId) {
+  var state = {
+    step: "department",
+    department: "",
+    name: "",
+    completionDate: "",
+    designType: "",
+    contentDescription: ""
+  };
+  scriptProperties.setProperty(chatId, JSON.stringify(state));
+}
+
+function updateUserState(chatId, key, value) {
+  var state = JSON.parse(scriptProperties.getProperty(chatId));
+  state[key] = value;
+  scriptProperties.setProperty(chatId, JSON.stringify(state));
+}
+
+function getNextStep(step) {
+  var steps = ["department", "name", "completionDate", "designType", "contentDescription", "summary"];
+  var nextIndex = steps.indexOf(step) + 1;
+  return steps[nextIndex];
+}
+
+function sendText(chatId, text, keyboard) {
+  var payload = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      reply_markup: keyboard ? {inline_keyboard: keyboard} : undefined
+    })
+  };
+  var url = telegramUrl + "/sendMessage";
+  UrlFetchApp.fetch(url, payload);
+}
+
+function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+
+  if (data.callback_query) {
+    var chatId = data.callback_query.message.chat.id.toString();
+    var callbackData = data.callback_query.data;
+
+    var ackUrl = telegramUrl + "/answerCallbackQuery?callback_query_id=" + encodeURIComponent(data.callback_query.id);
+    UrlFetchApp.fetch(ackUrl);
+
+    handleCallbackQuery(chatId, callbackData);
+  } else if (data.message) {
+    var chatId = data.message.chat.id.toString();
+    var text = data.message.text;
+
+    //"79869704"
+
+    if(text.startsWith('/updateNotion') & chatId == "79869704"){
+
+      var lastSpaceIndex = text.lastIndexOf(' ');
+
+  // If there is no space, return an empty string
+  if (lastSpaceIndex === -1) {
+  }
+
+  // Get the substring after the last space
+  var rownumber = text.substring(lastSpaceIndex + 1);
+      
+  manualAddtoNotion(rownumber);
+    }
+
+    if (text === '/start') {
+      initializeUserState(chatId);
+      var keyboard = [
+  [{text: "Registration", callback_data: "department_Registration"}],
+  [{text: "CA/PA", callback_data: "department_CA/PA"}],
+  [{text: "Facility", callback_data: "department_Facility"}],
+  [{text: "Technology", callback_data: "department_Technology"}],
+  [{text: "Food Services", callback_data: "department_Food Services"}],
+  [{text: "Parking/Security", callback_data: "department_Parking/Security"}],
+  [{text: "Aksharpith", callback_data: "department_Aksharpith"}],
+  [{text: "Program Vyavstha", callback_data: "department_Program Vyavstha"}],
+  [{text: "Experience", callback_data: "department_Experience"}],
+  [{text: "Sant Vyavstha", callback_data: "department_Sant Vyavstha"}],
+  [{text: "Accounting", callback_data: "department_Accounting"}]
+];
+
+      sendText(chatId, "Jai Swāminārāyan! Please select your department:", keyboard);
+    } else if (text.startsWith('/status')) {
+      listActiveRequests(chatId);  // Call listActiveRequests directly for /status command
+    } else {
+      handleDesignRequest(chatId, text);
+    }
+  }
+}
+
+function handleDesignRequest(chatId, text) {
+  var state = JSON.parse(scriptProperties.getProperty(chatId));
+  
+  if (state) {
+    switch (state.step) {
+      case "department":
+        // This case is now handled through buttons and the handleCallbackQuery function
+        break;
+      
+      case "name":
+        updateUserState(chatId, "name", text);
+        updateUserState(chatId, "step", getNextStep(state.step));
+        sendText(chatId, "Please provide the suggested date of completion (MM-DD-YYYY):");
+        break;
+      
+      case "completionDate":
+        updateUserState(chatId, "completionDate", text);
+        updateUserState(chatId, "step", getNextStep(state.step));
+        var keyboard = [
+          [{text: "Digital", callback_data: "designType_Digital"}],
+          [{text: "Print", callback_data: "designType_Print"}]
+        ];
+        sendText(chatId, "Is this design for digital or print? Please specify:", keyboard);
+        break;
+      
+      case "designType":
+        // This case is now handled through buttons and the handleCallbackQuery function
+        break;
+      
+      case "contentDescription":
+        updateUserState(chatId, "contentDescription", text);
+        // Assuming that contentDescription is the final step before generating the summary
+        state = JSON.parse(scriptProperties.getProperty(chatId)); // Refresh state to include latest updates
+        var summary = generateSummaryAndUpdateSheet(chatId, state);
+        sendText(chatId, summary);
+        scriptProperties.deleteProperty(chatId); // Clear user state after completing the process
+        break;
+
+      default:
+        // A default case to handle unexpected input; could prompt the user to start over or provide help
+        sendText(chatId, "I didn't understand that. Please use the buttons to navigate the request process, or type '/start' to begin a new request.");
+        break;
+    }
+  } else {
+    // This else block handles cases where state is undefined, which shouldn't normally happen but might if the user state is lost or improperly initialized
+    sendText(chatId, "It seems your session has expired or encountered an error. Please type '/start' to begin a new design request.");
+  }
+}
+
+function handleCallbackQuery(chatId, callbackData) {
+  var parts = callbackData.split('_');
+  var action = parts[0];
+  var value = parts.slice(1).join('_');
+
+  switch (action) {
+      case 'department':
+          var state = JSON.parse(scriptProperties.getProperty(chatId));
+          updateUserState(chatId, 'department', value.replace(/_/g, ' ')); // Restore spaces from underscores
+          updateUserState(chatId, 'step', getNextStep(state.step));
+          sendText(chatId, "Please enter your name:");
+          break;
+      
+      case 'designType':
+          var state = JSON.parse(scriptProperties.getProperty(chatId));
+          updateUserState(chatId, 'designType', value);
+          updateUserState(chatId, 'step', getNextStep(state.step));
+          sendText(chatId, "Please outline the content requirements for the design and provide the specific dimensions.");
+          break;
+
+      case 'check_status':
+          listActiveRequests(chatId);  // If implementing an option to view all statuses
+          break;
+
+      case 'status':
+          // Here, 'value' is the requestId for the selected request
+          sendRequestSummary(chatId, value); // Executes when a user selects an active request from the list
+          break;
+
+      default:
+          sendText(chatId, "I didn't understand your selection. Please try again.");
+          break;
+  }
+}
+
+function checkRequestStatus(chatId, requestId) {
+  var sheet = SpreadsheetApp.openById(ssId).getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  var foundRequestID = false;
+
+  for (var i = 1; i < data.length; i++) {
+    // Check if the Request ID matches.
+    if (data[i][0] === requestId) {
+      foundRequestID = true;
+      // Check if the Chat ID matches, ensuring the request belongs to the user.
+      if (data[i][1].toString().trim() === chatId) {
+        var status = data[i][7]; // Assuming status is in the 8th column.
+        sendText(chatId, "The status of your request (ID: " + requestId + ") is: " + status);
+        return;
+      } else {
+        // Log or send detailed error for debugging.
+        sendText(chatId, "Debug: Request ID matches but not Chat ID. Found Chat ID: " + data[i][1] + ", Your Chat ID: " + chatId);
+        return;
+      }
+    }
+  }
+
+  if (!foundRequestID) {
+    // If no matching Request ID is found in the Sheet.
+    sendText(chatId, "Sorry, we couldn't find a request with ID: " + requestId);
+  }
+}
+
+function listActiveRequests(chatId) {
+  var sheet = SpreadsheetApp.openById(ssId).getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  var activeRequests = [];
+
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1].toString().trim() === chatId) {
+      var requestId = data[i][0]; // Assuming the first column is Request ID
+      var status = data[i][7]; // Assuming the eighth column is Status
+      activeRequests.push([{text: "ID: " + requestId + " - " + status, callback_data: "status_" + requestId}]);
+    }
+  }
+  
+  if (activeRequests.length > 0) {
+    sendText(chatId, "Select an active request to view its status:", activeRequests);
+  } else {
+    sendText(chatId, "There are no active requests. Use '/start' to create a new request.");
+  }
+}
+
+function sendRequestSummary(chatId, requestId) {
+  var sheet = SpreadsheetApp.openById(ssId).getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] === requestId) { // Assuming the first column is Request ID
+      var requestDetails = data[i];
+      var summary = "Design Request Summary:\n";
+      summary += "Request ID: " + requestDetails[0] + "\n";
+      summary += "Chat ID: " + requestDetails[1] + "\n";
+      summary += "Department: " + requestDetails[2] + "\n";
+      summary += "Name: " + requestDetails[3] + "\n";
+
+      // Formatting the date to exclude time
+      var completionDate = new Date(requestDetails[4]);
+      var formattedDate = completionDate.getFullYear() + '-' + 
+                          ('0' + (completionDate.getMonth() + 1)).slice(-2) + '-' + 
+                          ('0' + completionDate.getDate()).slice(-2);
+                          
+      summary += "Completion Date: " + formattedDate + "\n"; // Use formatted date
+      summary += "Design Type: " + requestDetails[5] + "\n";
+      summary += "Content Description: " + requestDetails[6] + "\n";
+      summary += "Status: " + requestDetails[7];
+      
+      // Check if the status is "Completed" and add the link to the summary
+      if(requestDetails[7].toLowerCase() === "completed" && requestDetails[8]) {
+        summary += "\nLink: " + requestDetails[8]; // Assuming the link is in the 9th column
+      }
+      
+      sendText(chatId, summary);
+      return;
+    }
+  }
+  sendText(chatId, "Sorry, the requested summary could not be found.");
+}
+
+function generateSummaryAndUpdateSheet(chatId, state) {
+  // Refresh state in case it has been updated since initialization
+  state = JSON.parse(scriptProperties.getProperty(chatId));
+
+  // Using Google's built-in UUID generator for a unique requestId
+  var requestId = Utilities.getUuid();
+  
+  // Building the summary string to display to the user
+  var summary = "Design Request Summary:\n";
+  summary += "Request ID: " + requestId + "\n";
+  summary += "Chat ID: " + chatId + "\n";
+  summary += "Department: " + state.department + "\n";
+  summary += "Name: " + state.name + "\n";
+  summary += "Completion Date: " + state.completionDate + "\n";
+  summary += "Design Type: " + state.designType + "\n";
+  summary += "Content Description: " + state.contentDescription + "\n";
+  summary += "Status: Pending";
+
+  var date1 = new Date(state.completionDate);
+  var formattedDate = date1.getFullYear() + '-' + 
+                          ('0' + (date1.getMonth() + 1)).slice(-2) + '-' + 
+                          ('0' + date1.getDate()).slice(-2);
+
+   addPageToNotionDatabase(requestId, chatId, state.department, 
+    state.name, 
+    formattedDate, 
+    state.designType, 
+    state.contentDescription);
+  
+  // Accessing the active sheet from the Google Spreadsheet and appending the new row
+  var sheet = SpreadsheetApp.openById(ssId).getActiveSheet();
+  sheet.appendRow([
+    requestId, 
+    chatId, 
+    state.department, 
+    state.name, 
+    state.completionDate, 
+    state.designType, 
+    state.contentDescription, 
+    "Pending"
+  ]);
+
+  
+  // Return the summary so it can be used, for example, to send a message to the user
+  return summary;
+}
+
+
+
+function manualAddtoNotion(row_number){
+  var sheet = SpreadsheetApp.openById(ssId).getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+
+  var data_push = data[row_number-1] 
+  Logger.log(data_push)
+  var date1 = new Date(data_push[4]);
+  var formattedDate = date1.getFullYear() + '-' + 
+                          ('0' + (date1.getMonth() + 1)).slice(-2) + '-' + 
+                          ('0' + date1.getDate()).slice(-2); 
+
+  addPageToNotionDatabase(data_push[0], data_push[1].toString(), data_push[2], 
+    data_push[3].toString(), 
+    formattedDate, 
+    data_push[5], 
+    data_push[6]);
+}
